@@ -44,7 +44,7 @@ function extract_image() {
             echo "Repacking base image as tarball."
 
             WORKING=$(mktemp --tmpdir=${TMP_DIR:-/tmp} -d)
-            EACTION="rm -r $WORKING"
+            EACTION="rm -r $WORKING;lsblk"
             trap "$EACTION" EXIT
             echo "Working in $WORKING"
 
@@ -80,6 +80,18 @@ function extract_image() {
             fi
             EACTION="sudo kpartx -d $RAW_FILE ; $EACTION"
             trap "$EACTION" EXIT
+            # add sxd start
+            # for lvm
+            #ROOT_LOOPDEV=ncl-root
+            echo "======= [Pre ] Root dev is: $ROOT_LOOPDEV ======="
+            root_part_lvm_dev=$(sudo lsblk|grep -A 1 -B 0 "$ROOT_LOOPDEV"|grep -E " lvm"|grep -oE "[a-zA-Z].*"|awk '{print $1}'||echo "none")
+            root_part_dev_tmp="none"
+            [[ ${root_part_lvm_dev} != "none" ]] && {
+               root_part_dev_tmp=${ROOT_LOOPDEV}
+               ROOT_LOOPDEV=${root_part_lvm_dev}
+            }
+            echo "======= [Post] Root dev is: $ROOT_LOOPDEV ======="
+            # add sxd end
             mkdir $WORKING/mnt
             if [ "xfs" = "$(sudo blkid -o value -s TYPE /dev/mapper/$ROOT_LOOPDEV)" ]; then
                 # mount xfs with nouuid, just in case that uuid is already mounted
@@ -89,7 +101,10 @@ function extract_image() {
             fi
 
             sudo mount $MOUNTOPTS /dev/mapper/$ROOT_LOOPDEV $WORKING/mnt
-            EACTION="sudo umount -f $WORKING/mnt ; $EACTION"
+            [[ ${root_part_dev_tmp} != "none" ]] && EACTION="sudo dmsetup remove -f ${ROOT_LOOPDEV}; \
+              sudo dmsetup remove -f ${root_part_dev_tmp}; $EACTION"
+            EACTION="sudo umount -f $WORKING/mnt; $EACTION"
+            echo "======= [Trap] the stack is: $EACTION ======="
             trap "$EACTION" EXIT
 
             # find out if chroot tar has full xattr support
