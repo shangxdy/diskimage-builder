@@ -133,6 +133,13 @@ function install_grub2 {
         # device.  ppc has a dedicated PReP boot partition.
         # For grub2 < 2.02~beta3 this needs to be a /dev/mapper/... node after
         # that a dev/loopXpN node will work fine.
+        # sxd mod start
+        # /dev/loopx -> /dev/mapper/loopxp1
+        dev=${DEVICES[boot]}
+        dev_part=${dev##*/}
+        dev_part="/dev/mapper/${dev_part}p1"
+        echo "(hd0)      ${dev_part}" > /boot/grub2/device.map
+        # sxd mod end
         $GRUBNAME --modules="part_msdos" $GRUB_OPTS ${DEVICES[boot]} --no-nvram
     else
         # This set of modules is sufficient for all installs (mbr/gpt/efi)
@@ -155,6 +162,12 @@ function install_grub2 {
                 # for any other architectures.
             esac
         fi
+        # sxd mod start
+        # /dev/loopx -> /dev/mapper/loopxp1
+        dev_part=${BOOT_DEV##*/}
+        dev_part="/dev/mapper/${dev_part}p1"
+        echo "(hd0)      ${dev_part}" > /boot/grub2/device.map
+        # sxd mod end
         $GRUBNAME --modules="$modules" $extra_options $GRUB_OPTS $BOOT_DEV
     fi
 

@@ -17,6 +17,7 @@ CACHED_IMAGE=$4
 CACHED_TAR=$DIB_IMAGE_CACHE/$BASE_IMAGE_TAR
 DIB_LOCAL_IMAGE=${DIB_LOCAL_IMAGE:-""}
 TAR_LOCK=$CACHED_TAR.lock
+LVM=""
 
 function extract_image() {
     if [ -n "$DIB_OFFLINE" -a -f "$CACHED_TAR" ] ; then
@@ -44,7 +45,7 @@ function extract_image() {
             echo "Repacking base image as tarball."
 
             WORKING=$(mktemp --tmpdir=${TMP_DIR:-/tmp} -d)
-            EACTION="rm -r $WORKING;lsblk"
+            EACTION="rm -r $WORKING; lsblk"
             trap "$EACTION" EXIT
             echo "Working in $WORKING"
 
@@ -68,6 +69,7 @@ function extract_image() {
 
             # XXX: Parsing stdout is dangerous, would like a better way to discover
             #      the device used for the image.
+            lsblk
             ROOT_LOOPDEV=$(sudo kpartx -av $RAW_FILE | \
                 awk "/loop[0-9]+$ROOT_PARTITION/ {print \$3}")
             # If running inside Docker, make our nodes manually, because udev will not be working.
@@ -91,7 +93,16 @@ function extract_image() {
                ROOT_LOOPDEV=${root_part_lvm_dev}
             }
             echo "======= [Post] Root dev is: $ROOT_LOOPDEV ======="
+            set -x
+            [[ $root_part_dev_tmp != "none" ]] && {
+               part_cnt=${root_part_dev_tmp:$((${#root_part_dev_tmp}-1)):1}
+            } || part_cnt=0
+            [[ $part_cnt -gt 1 ]] && {
+               root_part_dev_boot=${root_part_dev_tmp:0:$((${#root_part_dev_tmp}-1))}$(($part_cnt-1))
+            } || root_part_dev_boot="none"
+            echo "======= [Boot] Boot dev is: $root_part_dev_boot ======="
             # add sxd end
+
             mkdir $WORKING/mnt
             if [ "xfs" = "$(sudo blkid -o value -s TYPE /dev/mapper/$ROOT_LOOPDEV)" ]; then
                 # mount xfs with nouuid, just in case that uuid is already mounted
@@ -99,19 +110,33 @@ function extract_image() {
             else
                 MOUNTOPTS=""
             fi
-
             sudo mount $MOUNTOPTS /dev/mapper/$ROOT_LOOPDEV $WORKING/mnt
-            [[ ${root_part_dev_tmp} != "none" ]] && EACTION="sudo dmsetup remove -f ${ROOT_LOOPDEV}; \
-              sudo dmsetup remove -f ${root_part_dev_tmp}; $EACTION"
+            [[ ${root_part_dev_tmp} != "none" ]] && EACTION="sudo dmsetup remove -f ${ROOT_LOOPDEV};sudo dmsetup remove -f ${root_part_dev_tmp}; $EACTION"
             EACTION="sudo umount -f $WORKING/mnt; $EACTION"
+            [[ $root_part_dev_boot != "none" ]] && {
+               mkdir $WORKING/mnt_boot
+               sudo mount /dev/mapper/$root_part_dev_boot $WORKING/mnt_boot
+               EACTION="sudo umount -f $WORKING/mnt_boot; sudo rm -fr $WORKING/mnt_boot; $EACTION"
+               sudo cp -r $WORKING/mnt_boot/* $WORKING/mnt/boot/
+               # NOTE:
+               # 1. must modify the device.map for install-grub
+               # 2. the ideal modification chance is when install bootloader
+               # 3. here modification is temperary and must run after base image createion immediately
+               echo "(hd0)      /dev/mapper/$root_part_dev_boot" > $WORKING/mnt/boot/grub2/device.map
+#               sudo rm -fr $WORKING/mnt/boot/grub2
+#               sudo rm -fr $WORKING/mnt/etc/default/grub
+#               sudo rm -fr $WORKING/mnt/etc/grub2.cfg
+#               sudo rm -fr $WORKING/mnt/etc/grub.d/*
+            }
             echo "======= [Trap] the stack is: $EACTION ======="
+            set +x
             trap "$EACTION" EXIT
 
             # find out if chroot tar has full xattr support
             if [ 0 == `sudo chroot $WORKING/mnt bin/tar --help | grep -c xattrs-exclude` ]; then
                 TAROPTS="--no-xattrs"
             else
-                TAROPTS="--xattrs --xattrs-include=* --xattrs-exclude=security.selinux"
+                TAROPTS="--xattrs --xattrs-include='*' --xattrs-exclude='security.selinux'"
             fi
             # Chroot in so that we get the correct uid/gid
             sudo chroot $WORKING/mnt bin/tar $TAROPTS -cz . > $WORKING/tmp.tar
